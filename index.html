@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>향의 장부 · 증류기</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#e8e2d3; --ink:#1b1916; --amber:#e0a33a; --muted:#6b655a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--paper);overflow:hidden;
+    font-family:"Nanum Myeongjo","Batang",serif}
+  canvas{display:block;width:100vw;height:100vh;cursor:grab;touch-action:none}
+  canvas:active{cursor:grabbing}
+  .panel{position:fixed;pointer-events:none}
+  .title{top:28px;left:32px;max-width:420px}
+  .title small{display:block;font-size:12px;letter-spacing:.3em;color:var(--amber);margin-bottom:10px}
+  .title h1{margin:0 0 12px;font-size:34px;font-weight:700;letter-spacing:.04em}
+  .title p{margin:0;font-size:14px;line-height:1.8;color:#bfb8a8}
+  .ledger{right:32px;top:28px;text-align:right;font-size:12px;letter-spacing:.15em;color:#bfb8a8}
+  .ledger b{display:block;font-size:30px;color:var(--amber);letter-spacing:.02em;margin-top:4px}
+  .controls{left:50%;bottom:28px;transform:translateX(-50%);pointer-events:auto;
+    display:flex;gap:22px;align-items:center;padding:12px 20px;border:1px solid #3a362f;background:rgba(27,25,22,.82)}
+  .controls label{font-size:13px;display:flex;gap:8px;align-items:center;white-space:nowrap;cursor:pointer}
+  .controls input[type=range]{width:180px;accent-color:var(--amber)}
+  .controls input[type=checkbox]{accent-color:var(--amber)}
+  .hint{left:32px;bottom:34px;font-size:11px;color:var(--muted);letter-spacing:.1em}
+  .credit{right:32px;bottom:34px;max-width:260px;text-align:right;font-size:10px;line-height:1.6;color:var(--muted)}
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:14px;letter-spacing:.3em;color:var(--amber);pointer-events:none;transition:opacity .8s}
+  @media (max-width:700px){
+    .title{left:16px;top:16px;right:16px}
+    .title h1{font-size:26px}
+    .title p{font-size:13px}
+    .ledger{display:none}
+    .hint{display:none}
+    .credit{display:none}
+    .controls{left:16px;right:16px;bottom:16px;transform:none;flex-wrap:wrap;gap:12px}
+    .controls input[type=range]{width:120px}
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./lib/three.module.js",
+  "three/addons/": "./lib/addons/",
+  "@sparkjsdev/spark": "./lib/spark.module.js"
+} }
+</script>
+</head>
+<body>
+<div class="panel title">
+  <small>향의 장부 · 오브제 01</small>
+  <h1>발디니의 증류기</h1>
+  <p>파리의 향수상 발디니 공방.<br>그르누이는 이 증류기로 꽃에서 향을 뽑아내는 법을 배움.<br>유리·돌·쇠처럼 증류로는 냄새를 뽑을 수 없는 것이 있다는 것도 여기서 알게 됨.</p>
+</div>
+<div class="panel ledger">뽑아낸 향<b id="pct">0%</b></div>
+<div id="loading">불러오는 중</div>
+<div class="panel controls">
+  <label>증류 <input id="distill" type="range" min="0" max="100" value="0"></label>
+  <label><input id="dither" type="checkbox" checked> 1-bit</label>
+  <label><input id="motes" type="checkbox" checked> 향 입자</label>
+</div>
+<div class="panel hint">드래그 회전 · 휠 확대</div>
+<div class="panel credit">사진: Copper still from Meyer Brothers Pharmacy, Missouri History Museum (퍼블릭 도메인, Wikimedia Commons) · 3D: TripoSplat · 렌더: Spark</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { SparkRenderer, SplatMesh, dyno } from "@sparkjsdev/spark";
+
+// ---- 설정 ----
+const params = new URLSearchParams(location.search);
+const PLY_URL = params.get("ply") || "alembic.ply";
+const FLIP = params.get("flip") !== "0";          // 3DGS .ply는 보통 위아래가 뒤집혀 있음
+const AMBER = new THREE.Color("#e0a33a");
+const INK = new THREE.Color("#1b1916"), PAPER = new THREE.Color("#e8e2d3");
+
+// ---- 렌더러 ----
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x2a2721, 1);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(0, 0.25, 5.4);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.autoRotate = true; controls.autoRotateSpeed = 0.6;
+controls.minDistance = 1.5; controls.maxDistance = 9;
+
+const spark = new SparkRenderer({ renderer });
+scene.add(spark);
+
+// ---- 증류(증발) 효과: 스플랫이 위로 떠오르며 호박색 향으로 바뀜 ----
+const uDistill = dyno.dynoFloat(0);
+const uTime = dyno.dynoFloat(0);
+const uMinY = dyno.dynoFloat(-1), uHeight = dyno.dynoFloat(2);
+const uMark = dyno.dynoFloat(1); // 1이면 증발한 향을 마젠타로 표시 → 디더에서 호박색으로 바꿈
+
+const evaporate = new dyno.Dyno({
+  inTypes: { gsplat: dyno.Gsplat, u: "float", t: "float", minY: "float", h: "float", mark: "float" },
+  outTypes: { gsplat: dyno.Gsplat },
+  globals: () => [dyno.unindent(`
+    float evHash(float n){ return fract(sin(n*12.9898)*43758.5453); }
+  `)],
+  statements: ({ inputs, outputs }) => dyno.unindentLines(`
+    ${outputs.gsplat} = ${inputs.gsplat};
+    float id = float(${inputs.gsplat}.index);
+    float r = evHash(id);
+    // 위쪽부터 먼저 증발하도록: 높이와 랜덤을 섞음
+    float yN = clamp((${inputs.gsplat}.center.y - ${inputs.minY}) / ${inputs.h}, 0.0, 1.0);
+    float order = mix(r, 1.0 - yN, 0.45);
+    float k = smoothstep(order, order + 0.1, ${inputs.u} * 1.1);
+    if (k > 0.0) {
+      float ph = fract(${inputs.t} * (0.08 + 0.06 * evHash(id + 7.0)) + r * 5.0);
+      vec3 c = ${inputs.gsplat}.center;
+      float rise = ph * ${inputs.h} * (0.9 + 0.8 * evHash(id + 3.0));
+      c.y += rise * k;
+      c.x += sin(${inputs.t} * 0.9 + r * 40.0 + ph * 6.0) * 0.12 * ph * k;
+      c.z += cos(${inputs.t} * 0.7 + r * 30.0 + ph * 5.0) * 0.12 * ph * k;
+      ${outputs.gsplat}.center = c;
+      ${outputs.gsplat}.scales *= mix(1.0, 0.45, k);
+      vec3 amber = mix(vec3(${AMBER.r.toFixed(3)}, ${AMBER.g.toFixed(3)}, ${AMBER.b.toFixed(3)}), vec3(1.0, 0.0, 1.0), ${inputs.mark});
+      ${outputs.gsplat}.rgba.rgb = mix(${inputs.gsplat}.rgba.rgb, amber, k);
+      float a = ${inputs.gsplat}.rgba.a;
+      ${outputs.gsplat}.rgba.a = mix(a, a * 0.85 * sin(3.14159 * ph), k);
+    }
+  `),
+});
+
+let mesh;
+// 떠다니는 잡티(floater) 때문에 크기가 틀어지지 않게 2~98% 범위로 상자 계산
+function robustBox(m) {
+  const xs = [], ys = [], zs = [];
+  m.forEachSplat((i, c, sc, q, op) => { if (op > 0.1) { xs.push(c.x); ys.push(c.y); zs.push(c.z); } });
+  const q = (a, f) => { a.sort((x, y) => x - y); return a[Math.floor(f * (a.length - 1))]; };
+  return new THREE.Box3(new THREE.Vector3(q(xs, .02), q(ys, .02), q(zs, .02)), new THREE.Vector3(q(xs, .98), q(ys, .98), q(zs, .98)));
+}
+async function load() {
+  mesh = new SplatMesh({ url: PLY_URL });
+  await mesh.initialized;
+  if (FLIP) mesh.quaternion.set(1, 0, 0, 0);       // 180° X축 회전
+  // 크기 맞추기: 높이 2 안쪽, 가운데 정렬
+  const box = robustBox(mesh);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const center = new THREE.Vector3(); box.getCenter(center);
+  const s = 1.8 / Math.max(size.x, size.y, size.z);
+  mesh.scale.setScalar(s);
+  if (FLIP) center.y *= -1, center.z *= -1;
+  mesh.position.copy(center).multiplyScalar(-s);
+  // 증발 방향/높이 (dyno는 오브젝트 좌표에서 동작 → 뒤집혔으면 방향 반대)
+  uMinY.value = FLIP ? box.max.y : box.min.y;
+  uHeight.value = FLIP ? -size.y : size.y;
+  mesh.objectModifier = dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
+    return { gsplat: evaporate.apply({ gsplat, u: uDistill, t: uTime, minY: uMinY, h: uHeight, mark: uMark }).gsplat };
+  });
+  mesh.updateGenerator();
+  scene.add(mesh);
+  document.getElementById("loading").style.opacity = 0;
+}
+
+// ---- 떠다니는 향 입자 (항상 위로 흐름) ----
+const N = 600;
+const mPos = new Float32Array(N * 3), mSeed = new Float32Array(N);
+for (let i = 0; i < N; i++) { mSeed[i] = Math.random(); }
+const mGeo = new THREE.BufferGeometry();
+mGeo.setAttribute("position", new THREE.BufferAttribute(mPos, 3));
+mGeo.setAttribute("seed", new THREE.BufferAttribute(mSeed, 1));
+const mMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  uniforms: { uTime: { value: 0 }, uColor: { value: AMBER }, uStrength: { value: 0.35 }, uPx: { value: renderer.getPixelRatio() } },
+  vertexShader: `
+    attribute float seed; uniform float uTime; uniform float uPx; varying float vA;
+    void main(){
+      float ph = fract(uTime*(0.04+0.05*fract(seed*91.7)) + seed*13.0);
+      float ang = seed*6.2831*7.0 + uTime*0.2;
+      float rad = 0.25 + 0.9*fract(seed*37.3) + ph*0.4;
+      vec3 p = vec3(cos(ang)*rad, -0.9 + ph*2.6, sin(ang)*rad);
+      p.x += sin(uTime*0.7+seed*50.0)*0.15; p.z += cos(uTime*0.6+seed*40.0)*0.15;
+      vA = sin(3.14159*ph);
+      vec4 mv = modelViewMatrix*vec4(p,1.0);
+      gl_PointSize = (2.0 + 3.0*fract(seed*17.1)) * uPx * (3.0 / -mv.z);
+      gl_Position = projectionMatrix*mv;
+    }`,
+  fragmentShader: `
+    uniform vec3 uColor; uniform float uStrength; varying float vA;
+    void main(){ vec2 d = gl_PointCoord-0.5; float m = smoothstep(0.5,0.1,length(d));
+      gl_FragColor = vec4(uColor, m*vA*uStrength); }`,
+});
+const motes = new THREE.Points(mGeo, mMat);
+motes.frustumCulled = false;
+const moteScene = new THREE.Scene(); moteScene.add(motes);
+
+// ---- 1-bit 디더 (오브라 딘 느낌): 밝기 → 잉크/종이, 호박색은 그대로 남김 ----
+const PIX = 2; // 디더 픽셀 크기
+let rt = makeRT();
+function makeRT(){
+  const t = new THREE.WebGLRenderTarget(Math.ceil(innerWidth/PIX), Math.ceil(innerHeight/PIX));
+  t.texture.minFilter = t.texture.magFilter = THREE.NearestFilter;
+  return t;
+}
+const ditherMat = new THREE.ShaderMaterial({
+  uniforms: { tScene: { value: rt.texture }, uRes: { value: new THREE.Vector2(rt.width, rt.height) },
+    uInk: { value: INK }, uPaper: { value: PAPER }, uAmber: { value: AMBER } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.,1.); }`,
+  fragmentShader: `
+    uniform sampler2D tScene; uniform vec2 uRes; uniform vec3 uInk, uPaper, uAmber; varying vec2 vUv;
+    float bayer4(vec2 p){ ivec2 i = ivec2(mod(p,4.0));
+      int b[16] = int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
+      return (float(b[i.y*4+i.x])+0.5)/16.0; }
+    void main(){
+      vec3 c = texture2D(tScene, vUv).rgb;
+      float l = dot(c, vec3(0.299,0.587,0.114));
+      l = clamp((l-0.05)*2.0, 0.0, 1.0);
+      // 호박색에 가까운 픽셀(증발하는 향)은 호박색으로 표시
+      float amb = clamp((min(c.r, c.b) - c.g) * 3.0, 0.0, 1.0);
+      float on = step(bayer4(gl_FragCoord.xy), l);
+      vec3 base = mix(uInk, uPaper, on);
+      vec3 hi = mix(uInk, uAmber, step(bayer4(gl_FragCoord.xy), 0.85));
+      gl_FragColor = vec4(mix(base, hi, amb), 1.0);
+    }`,
+});
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), ditherMat);
+const quadScene = new THREE.Scene(); quadScene.add(quad);
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+// ---- UI ----
+const $d = document.getElementById("distill"), $pct = document.getElementById("pct");
+const $dither = document.getElementById("dither"), $motes = document.getElementById("motes");
+let target = 0;
+$d.addEventListener("input", () => { target = $d.value / 100; });
+renderer.domElement.addEventListener("pointerdown", () => controls.autoRotate = false);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  rt.dispose(); rt = makeRT(); ditherMat.uniforms.tScene.value = rt.texture;
+  ditherMat.uniforms.uRes.value.set(rt.width, rt.height);
+});
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  controls.update();
+  uDistill.value += (target - uDistill.value) * 0.05;
+  uTime.value = t;
+  uMark.value = $dither.checked ? 1 : 0;
+  if (mesh) mesh.updateVersion();
+  $pct.textContent = Math.round(uDistill.value * 100) + "%";
+  mMat.uniforms.uTime.value = t;
+  mMat.uniforms.uStrength.value = 0.25 + 0.6 * uDistill.value;
+
+  if ($dither.checked) {
+    renderer.setRenderTarget(rt);
+    renderer.setClearColor(0x2a2721, 1);
+    renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+    renderer.render(quadScene, quadCam);
+  } else {
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(0x2a2721, 1);
+    renderer.render(scene, camera);
+  }
+  if ($motes.checked) {
+    renderer.autoClear = false;
+    renderer.render(moteScene, camera);
+    renderer.autoClear = true;
+  }
+});
+
+load().catch(e => {
+  document.getElementById("loading").textContent = "오브젝트를 불러오지 못함: " + PLY_URL;
+  console.error(e);
+});
+</script>
+</body>
+</html>
