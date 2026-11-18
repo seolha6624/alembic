@@ -113,21 +113,22 @@ const evaporate = new dyno.Dyno({
     float r = evHash(id);
     // 위쪽부터 먼저 증발하도록: 높이와 랜덤을 섞음
     float yN = clamp((${inputs.gsplat}.center.y - ${inputs.minY}) / ${inputs.h}, 0.0, 1.0);
-    float order = mix(r, 1.0 - yN, 0.45);
+    float order = mix(r, 1.0 - yN, 0.2);
     float k = smoothstep(order, order + 0.1, ${inputs.u} * 1.1);
     if (k > 0.0) {
       float ph = fract(${inputs.t} * (0.08 + 0.06 * evHash(id + 7.0)) + r * 5.0);
       vec3 c = ${inputs.gsplat}.center;
-      float rise = ph * ${inputs.h} * (0.9 + 0.8 * evHash(id + 3.0));
+      float rise = ph * ${inputs.h} * (1.2 + 1.2 * evHash(id + 3.0));
       c.y += rise * k;
-      c.x += sin(${inputs.t} * 0.9 + r * 40.0 + ph * 6.0) * 0.12 * ph * k;
-      c.z += cos(${inputs.t} * 0.7 + r * 30.0 + ph * 5.0) * 0.12 * ph * k;
+      float sw = 0.35 * abs(${inputs.h});
+      c.x += sin(${inputs.t} * 0.6 + r * 40.0 + ph * 4.0) * sw * ph * k;
+      c.z += cos(${inputs.t} * 0.5 + r * 30.0 + ph * 3.5) * sw * ph * k;
       ${outputs.gsplat}.center = c;
-      ${outputs.gsplat}.scales *= mix(1.0, 0.45, k);
+      ${outputs.gsplat}.scales *= mix(1.0, 0.22, k);
       vec3 amber = mix(vec3(${AMBER.r.toFixed(3)}, ${AMBER.g.toFixed(3)}, ${AMBER.b.toFixed(3)}), vec3(1.0, 0.0, 1.0), ${inputs.mark});
       ${outputs.gsplat}.rgba.rgb = mix(${inputs.gsplat}.rgba.rgb, amber, k);
       float a = ${inputs.gsplat}.rgba.a;
-      ${outputs.gsplat}.rgba.a = mix(a, a * 0.85 * sin(3.14159 * ph), k);
+      ${outputs.gsplat}.rgba.a = mix(a, a * 0.55 * sin(3.14159 * ph), k);
     }
   `),
 });
@@ -215,7 +216,7 @@ const ditherMat = new THREE.ShaderMaterial({
     void main(){
       vec3 c = texture2D(tScene, vUv).rgb;
       float l = dot(c, vec3(0.299,0.587,0.114));
-      l = clamp((l-0.05)*2.0, 0.0, 1.0);
+      l = clamp((l-0.04)*2.6, 0.0, 1.0);
       // 호박색에 가까운 픽셀(증발하는 향)은 호박색으로 표시
       float amb = clamp((min(c.r, c.b) - c.g) * 3.0, 0.0, 1.0);
       float on = step(bayer4(gl_FragCoord.xy), l);
